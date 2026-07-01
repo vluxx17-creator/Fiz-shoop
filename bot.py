@@ -8,7 +8,7 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.utils.markdown import hbold
 from aiohttp import web
@@ -46,7 +46,6 @@ COUNTRIES = [
     ("🇸🇪 Швеция", "Швеция"),
 ]
 
-# Количество стран на одной странице
 COUNTRIES_PER_PAGE = 4
 
 logging.basicConfig(level=logging.INFO)
@@ -63,7 +62,6 @@ class Database:
         self._create_tables()
 
     def _create_tables(self):
-        # Пользователи
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY,
@@ -74,7 +72,6 @@ class Database:
                 promo_used INTEGER DEFAULT 0
             )
         """)
-        # Аккаунты
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS accounts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -92,7 +89,6 @@ class Database:
                 is_departure BOOLEAN DEFAULT 0
             )
         """)
-        # Покупки
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS purchases (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -103,7 +99,6 @@ class Database:
                 admin_earned REAL DEFAULT 0
             )
         """)
-        # Отзывы с рейтингом
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS reviews (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -114,7 +109,6 @@ class Database:
                 created_at TEXT
             )
         """)
-        # Поддержка
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS support_messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -127,7 +121,6 @@ class Database:
                 answer_admin_id INTEGER
             )
         """)
-        # Заявки на пополнение
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS deposit_requests (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -140,7 +133,6 @@ class Database:
                 admin_id INTEGER
             )
         """)
-        # Баланс админов
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS admin_balances (
                 admin_id INTEGER PRIMARY KEY,
@@ -148,7 +140,6 @@ class Database:
                 total_earned REAL DEFAULT 0
             )
         """)
-        # Реквизиты админов
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS admin_withdraw_details (
                 admin_id INTEGER PRIMARY KEY,
@@ -158,7 +149,6 @@ class Database:
                 full_name TEXT
             )
         """)
-        # Промокоды
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS promocodes (
                 code TEXT PRIMARY KEY,
@@ -168,7 +158,6 @@ class Database:
                 expires_at TEXT
             )
         """)
-        # Баннеры
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS banners (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -178,7 +167,6 @@ class Database:
                 is_active BOOLEAN DEFAULT 1
             )
         """)
-        # Настройки магазина
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS shop_settings (
                 key TEXT PRIMARY KEY,
@@ -304,7 +292,7 @@ class Database:
             })
         return purchases
 
-    # ------------------ ОТЗЫВЫ (НОВЫЕ МЕТОДЫ) ------------------
+    # ------------------ ОТЗЫВЫ ------------------
     def add_review(self, user_id: int, username: str, rating: int, text: str):
         now = datetime.now().isoformat()
         self.cursor.execute(
@@ -529,7 +517,6 @@ def country_keyboard(departure: bool = False, page: int = 0):
         else:
             display = f"{emoji} {country}"
         builder.button(text=display, callback_data=f"country_{country}_{1 if departure else 0}")
-    # Навигационные кнопки
     nav_buttons = []
     if page > 0:
         nav_buttons.append(("◀️ Назад", f"country_page_{page-1}_{1 if departure else 0}"))
@@ -539,9 +526,7 @@ def country_keyboard(departure: bool = False, page: int = 0):
         for text, callback in nav_buttons:
             builder.button(text=text, callback_data=callback)
     builder.button(text="🔙 Назад", callback_data="main_menu")
-    builder.adjust(2)  # 2 кнопки в ряду для стран, навигационные сами по себе
-    # Для навигации делаем отдельный ряд
-    # Можно просто добавить их в конец, они будут в ряду по 2
+    builder.adjust(2)
     return builder.as_markup()
 
 def account_keyboard(accounts: List[Dict[str, Any]], departure: bool = False):
@@ -823,7 +808,6 @@ async def accounts_departure_menu(callback: CallbackQuery):
     await callback.message.edit_text("✈️ Аккаунты с отлетой\nВыберите страну:", reply_markup=country_keyboard(departure=True, page=0))
     await callback.answer()
 
-# Обработчик пагинации стран
 @dp.callback_query(F.data.startswith("country_page_"))
 async def country_page_callback(callback: CallbackQuery):
     parts = callback.data.split("_")
@@ -1125,7 +1109,7 @@ async def support_receive_message(message: Message, state: FSMContext):
     await message.answer("✅ Ваше сообщение отправлено. Мы свяжемся с вами в ближайшее время.", reply_markup=back_to_menu_keyboard())
     await state.clear()
 
-# ================== АДМИН-ПАНЕЛЬ (все обработчики) ==================
+# ================== АДМИН-ПАНЕЛЬ ==================
 @dp.callback_query(F.data == "admin_panel")
 async def admin_panel(callback: CallbackQuery):
     if callback.from_user.id not in ADMIN_IDS:
@@ -1215,7 +1199,7 @@ async def admin_reject_deposit(callback: CallbackQuery):
     await callback.message.edit_text("❌ Заявка отклонена.", reply_markup=back_to_menu_keyboard())
     await callback.answer()
 
-# Добавление аккаунта (админ)
+# ------------------ ДОБАВЛЕНИЕ АККАУНТА (АДМИН) ------------------
 @dp.callback_query(F.data == "admin_add_account")
 async def admin_add_account(callback: CallbackQuery, state: FSMContext):
     if callback.from_user.id not in ADMIN_IDS:
@@ -1322,7 +1306,7 @@ async def admin_add_departure(message: Message, state: FSMContext):
     )
     await state.clear()
 
-# Статистика
+# ------------------ СТАТИСТИКА ------------------
 @dp.callback_query(F.data == "admin_stats")
 async def admin_stats(callback: CallbackQuery):
     if callback.from_user.id not in ADMIN_IDS:
@@ -1337,7 +1321,7 @@ async def admin_stats(callback: CallbackQuery):
     )
     await callback.answer()
 
-# Мой баланс (админ)
+# ------------------ МОЙ БАЛАНС (АДМИН) ------------------
 @dp.callback_query(F.data == "admin_balance")
 async def admin_balance(callback: CallbackQuery):
     if callback.from_user.id not in ADMIN_IDS:
@@ -1352,7 +1336,7 @@ async def admin_balance(callback: CallbackQuery):
     )
     await callback.answer()
 
-# Вывод средств (админ)
+# ------------------ ВЫВОД СРЕДСТВ (АДМИН) ------------------
 @dp.callback_query(F.data == "admin_withdraw")
 async def admin_withdraw(callback: CallbackQuery, state: FSMContext):
     if callback.from_user.id not in ADMIN_IDS:
@@ -1391,7 +1375,7 @@ async def admin_withdraw_amount(message: Message, state: FSMContext):
     await message.answer(f"✅ Запрос на вывод {amount}₽ отправлен. Ожидайте обработки.", reply_markup=back_to_menu_keyboard())
     await state.clear()
 
-# Ответ в поддержку (админ)
+# ------------------ ОТВЕТ В ПОДДЕРЖКУ (АДМИН) ------------------
 @dp.callback_query(F.data == "admin_support_reply")
 async def admin_support_reply(callback: CallbackQuery):
     if callback.from_user.id not in ADMIN_IDS:
@@ -1460,7 +1444,7 @@ async def admin_reply_support_process(message: Message, state: FSMContext):
     await message.answer("✅ Ответ отправлен пользователю.", reply_markup=back_to_menu_keyboard())
     await state.clear()
 
-# Создание промокода (админ)
+# ------------------ СОЗДАНИЕ ПРОМОКОДА (АДМИН) ------------------
 @dp.callback_query(F.data == "admin_create_promo")
 async def admin_create_promo(callback: CallbackQuery, state: FSMContext):
     if callback.from_user.id not in ADMIN_IDS:
@@ -1512,7 +1496,7 @@ async def admin_promo_expiry(message: Message, state: FSMContext):
     )
     await state.clear()
 
-# Изменение баннера (админ)
+# ------------------ ИЗМЕНЕНИЕ БАННЕРА (АДМИН) ------------------
 @dp.callback_query(F.data == "admin_change_banner")
 async def admin_change_banner(callback: CallbackQuery, state: FSMContext):
     if callback.from_user.id not in ADMIN_IDS:
@@ -1548,7 +1532,7 @@ async def admin_banner_description(message: Message, state: FSMContext):
     await message.answer("✅ Баннер обновлён!", reply_markup=back_to_menu_keyboard())
     await state.clear()
 
-# Изменение описания (админ)
+# ------------------ ИЗМЕНЕНИЕ ОПИСАНИЯ (АДМИН) ------------------
 @dp.callback_query(F.data == "admin_change_desc")
 async def admin_change_desc(callback: CallbackQuery, state: FSMContext):
     if callback.from_user.id not in ADMIN_IDS:
@@ -1568,7 +1552,7 @@ async def admin_change_desc_process(message: Message, state: FSMContext):
     await message.answer("✅ Описание обновлено (старое удалено)!", reply_markup=back_to_menu_keyboard())
     await state.clear()
 
-# Мои реквизиты (админ)
+# ------------------ МОИ РЕКВИЗИТЫ (АДМИН) ------------------
 @dp.callback_query(F.data == "admin_my_details")
 async def admin_my_details(callback: CallbackQuery, state: FSMContext):
     if callback.from_user.id not in ADMIN_IDS:
