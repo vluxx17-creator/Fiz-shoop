@@ -8,14 +8,14 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import Message, CallbackQuery, InputFile, FSInputFile
+from aiogram.types import Message, CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from aiogram.utils.markdown import hbold, hitalic, hunderline, hcode, hspoiler
+from aiogram.utils.markdown import hbold, hitalic, hunderline, hcode
 from aiohttp import web
 
 # ================== КОНФИГУРАЦИЯ ==================
 BOT_TOKEN = "8918867676:AAHixz0SseKQ9eqV99oDPI-CTwdQsXrO9mI"
-ADMIN_IDS = [7727618205, 8297446667, 123456789]  # третий админ - замените на реальный ID
+ADMIN_IDS = [7727618205, 8297446667, 123456789]  # замените 123456789 на реальный ID
 
 # Реквизиты карты по умолчанию (для пополнения)
 DEFAULT_CARD_DETAILS = """
@@ -46,7 +46,7 @@ logger = logging.getLogger(__name__)
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# ================== БАЗА ДАННЫХ (РАСШИРЕННАЯ) ==================
+# ================== БАЗА ДАННЫХ ==================
 class Database:
     def __init__(self, db_name: str):
         self.conn = sqlite3.connect(db_name, check_same_thread=False)
@@ -137,7 +137,7 @@ class Database:
                 total_earned REAL DEFAULT 0
             )
         """)
-        # Реквизиты админов (для выводов)
+        # Реквизиты админов
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS admin_withdraw_details (
                 admin_id INTEGER PRIMARY KEY,
@@ -157,7 +157,7 @@ class Database:
                 expires_at TEXT
             )
         """)
-        # Баннеры (главное изображение и текст)
+        # Баннеры
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS banners (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -167,14 +167,13 @@ class Database:
                 is_active BOOLEAN DEFAULT 1
             )
         """)
-        # Настройки магазина (описание, карточка и т.д.)
+        # Настройки магазина
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS shop_settings (
                 key TEXT PRIMARY KEY,
                 value TEXT
             )
         """)
-        # Добавляем настройки по умолчанию
         self.cursor.execute("INSERT OR IGNORE INTO shop_settings (key, value) VALUES ('welcome_text', 'Добро пожаловать в Fiz-shop!')")
         self.cursor.execute("INSERT OR IGNORE INTO shop_settings (key, value) VALUES ('card_details', ?)", (DEFAULT_CARD_DETAILS,))
         self.conn.commit()
@@ -472,7 +471,6 @@ class Database:
         return None
 
     def set_banner(self, photo_id: str, title: str, description: str):
-        # Деактивируем старые баннеры
         self.cursor.execute("UPDATE banners SET is_active = 0")
         self.cursor.execute(
             "INSERT INTO banners (photo_id, title, description, is_active) VALUES (?, ?, ?, 1)",
@@ -742,17 +740,18 @@ class AdminMyDetailsStates(StatesGroup):
 
 # ================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==================
 async def send_account_data(chat_id: int, account: Dict[str, Any], caption_extra: str = ""):
+    # Код показываем как спойлер с помощью HTML-тега
+    code_spoiler = f'<span class="tg-spoiler">{account["code"]}</span>'
     text = (
         f"📱 Данные аккаунта:\n\n"
         f"Страна: {account['country']}\n"
         f"Номер: {account['number']}\n"
-        f"Код: {hspoiler(account['code'])}\n"
+        f"Код: {code_spoiler}\n"
         f"Дата: {account['date']}\n"
         f"Описание: {account['description'] or 'Нет'}\n"
         f"Цена: {account['price']}₽\n"
         f"{caption_extra}"
     )
-    # Если есть фото, отправляем его с подписью
     photo_id = account.get("photo_id")
     file_id = account.get("file_id")
     if photo_id:
@@ -761,35 +760,33 @@ async def send_account_data(chat_id: int, account: Dict[str, Any], caption_extra
                 chat_id=chat_id,
                 photo=photo_id,
                 caption=text,
-                reply_markup=back_to_menu_keyboard()
+                reply_markup=back_to_menu_keyboard(),
+                parse_mode="HTML"
             )
-            # Если есть дополнительный файл, отправляем его после фото
             if file_id:
                 await bot.send_document(chat_id, document=file_id)
             return
         except Exception as e:
             logger.error(f"Ошибка отправки фото: {e}")
-            # если фото не отправилось, пробуем отправить как документ
     if file_id:
         try:
             await bot.send_document(
                 chat_id=chat_id,
                 document=file_id,
                 caption=text,
-                reply_markup=back_to_menu_keyboard()
+                reply_markup=back_to_menu_keyboard(),
+                parse_mode="HTML"
             )
         except Exception as e:
             logger.error(f"Ошибка отправки файла: {e}")
-            await bot.send_message(chat_id, text, reply_markup=back_to_menu_keyboard())
+            await bot.send_message(chat_id, text, reply_markup=back_to_menu_keyboard(), parse_mode="HTML")
     else:
-        await bot.send_message(chat_id, text, reply_markup=back_to_menu_keyboard())
+        await bot.send_message(chat_id, text, reply_markup=back_to_menu_keyboard(), parse_mode="HTML")
 
 async def send_welcome_message(chat_id: int):
-    # Получаем баннер
     banner = db.get_active_banner()
     welcome_text = db.get_setting("welcome_text") or "Добро пожаловать в Fiz-shop!"
     if banner and banner.get("photo_id"):
-        # Отправляем баннер с текстом
         caption = f"<b>{banner.get('title', 'Fiz-shop')}</b>\n\n{banner.get('description', '')}"
         await bot.send_photo(
             chat_id=chat_id,
@@ -797,7 +794,6 @@ async def send_welcome_message(chat_id: int):
             caption=caption,
             parse_mode="HTML"
         )
-    # Отправляем приветственное сообщение
     await bot.send_message(
         chat_id,
         f"{hbold('Fiz-shop')}\n\n"
@@ -835,6 +831,27 @@ async def cmd_admin(message: Message):
         return
     await message.answer("🛠 Админ-панель Fiz-shop\nВыберите действие:", reply_markup=admin_panel_keyboard())
 
+@dp.message(Command("reply"))
+async def cmd_reply(message: Message):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.answer("❌ У вас нет прав для этой команды.")
+        return
+    args = message.text.split(maxsplit=2)
+    if len(args) < 3:
+        await message.answer("❌ Использование: /reply <user_id> <текст ответа>")
+        return
+    try:
+        user_id = int(args[1])
+    except ValueError:
+        await message.answer("❌ ID пользователя должен быть числом.")
+        return
+    answer_text = args[2]
+    try:
+        await bot.send_message(user_id, f"📩 Ответ от поддержки:\n{answer_text}")
+        await message.answer(f"✅ Ответ отправлен пользователю {user_id}.")
+    except Exception as e:
+        await message.answer(f"❌ Ошибка отправки: {e}")
+
 # ================== ОБРАБОТЧИКИ CALLBACK ==================
 @dp.callback_query(F.data == "main_menu")
 async def main_menu(callback: CallbackQuery):
@@ -842,12 +859,541 @@ async def main_menu(callback: CallbackQuery):
     await callback.message.delete()
     await callback.answer()
 
-# ... (остальные обработчики аналогичны предыдущей версии, но с обновлёнными текстами и новыми функциями)
-# Из-за ограничения по длине я сокращаю, но в финальном коде все обработчики должны быть.
+@dp.callback_query(F.data == "accounts")
+async def accounts_menu(callback: CallbackQuery):
+    await callback.message.edit_text("🌍 Выберите страну аккаунта:", reply_markup=country_keyboard(departure=False))
+    await callback.answer()
 
-# ================== НОВЫЕ ОБРАБОТЧИКИ ДЛЯ АДМИН-ПАНЕЛИ ==================
+@dp.callback_query(F.data == "accounts_departure")
+async def accounts_departure_menu(callback: CallbackQuery):
+    await callback.message.edit_text("✈️ Аккаунты с отлетой\nВыберите страну:", reply_markup=country_keyboard(departure=True))
+    await callback.answer()
 
-# Ответ в поддержку через админ-панель
+@dp.callback_query(F.data.startswith("country_"))
+async def select_country(callback: CallbackQuery):
+    parts = callback.data.split("_")
+    country = parts[1]
+    is_departure = bool(int(parts[2]))
+    accounts = db.get_available_accounts(country, departure=is_departure)
+    if not accounts:
+        await callback.message.edit_text(f"В данный момент нет доступных аккаунтов для {country}.", reply_markup=back_to_menu_keyboard())
+        await callback.answer()
+        return
+    accounts.sort(key=lambda x: x["price"])
+    text = f"📱 Доступные аккаунты ({country}):\n\n"
+    for acc in accounts:
+        text += f"• {acc['number']} — {acc['price']}₽\n"
+    await callback.message.edit_text(text, reply_markup=account_keyboard(accounts, departure=is_departure))
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("buy_account_"))
+async def buy_account(callback: CallbackQuery):
+    account_id = int(callback.data.split("_")[2])
+    account = db.get_account(account_id)
+    if not account or account["is_sold"]:
+        await callback.answer("Этого аккаунта уже нет в наличии.", show_alert=True)
+        await callback.message.edit_text("Выберите страну:", reply_markup=country_keyboard(departure=False))
+        return
+    user_id = callback.from_user.id
+    balance = db.get_balance(user_id)
+    if balance < account["price"]:
+        await callback.answer(f"Недостаточно средств. Пополните баланс (нужно {account['price']}₽).", show_alert=True)
+        await callback.message.edit_text(
+            f"Недостаточно средств для покупки аккаунта {account['number']}.\nЦена: {account['price']}₽\nВаш баланс: {balance:.2f}₽\n\nПополните баланс через раздел «Профиль».",
+            reply_markup=back_to_menu_keyboard()
+        )
+        return
+    text = (
+        f"Вы выбрали аккаунт:\nСтрана: {account['country']}\nНомер: {account['number']}\nЦена: {account['price']}₽\nБаланс: {balance:.2f}₽\n\nПодтвердите покупку:"
+    )
+    await callback.message.edit_text(text, reply_markup=payment_keyboard(account_id))
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("pay_"))
+async def confirm_payment(callback: CallbackQuery):
+    account_id = int(callback.data.split("_")[1])
+    account = db.get_account(account_id)
+    if not account or account["is_sold"]:
+        await callback.answer("Аккаунт уже продан.", show_alert=True)
+        await callback.message.edit_text("Выберите страну:", reply_markup=country_keyboard(departure=False))
+        return
+    user_id = callback.from_user.id
+    balance = db.get_balance(user_id)
+    if balance < account["price"]:
+        await callback.answer("Недостаточно средств.", show_alert=True)
+        return
+
+    success = db.buy_account(user_id, account_id)
+    if not success:
+        await callback.answer("Ошибка при покупке.", show_alert=True)
+        return
+
+    await callback.message.delete()
+    await send_account_data(user_id, account, caption_extra="✅ Аккаунт успешно куплен!")
+    await bot.send_message(user_id, "✍️ Оставьте отзыв о покупке, нажав на кнопку ниже.", reply_markup=review_keyboard())
+    await callback.answer()
+
+@dp.callback_query(F.data == "profile")
+async def profile(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    user = db.get_user(user_id)
+    if not user:
+        await callback.answer("Пользователь не найден", show_alert=True)
+        return
+    purchase_count = db.get_purchase_count(user_id)
+    username = user["username"] or "Без ника"
+    balance = user["balance"]
+    status = db.get_user_status(user_id)
+    registered_at = user["registered_at"]
+    try:
+        dt = datetime.fromisoformat(registered_at)
+        reg_date = dt.strftime("%d.%m.%Y")
+    except:
+        reg_date = registered_at
+
+    invite_link = f"https://t.me/{bot.username}?start=ref_{user_id}"
+    text = (
+        f"👤 Твой профиль\n\n"
+        f"ID: {user_id}\n"
+        f"Имя: {username}\n"
+        f"Юзернейм: @{username if username != 'Без ника' else 'не указан'}\n\n"
+        f"Покупок всего: {purchase_count}\n"
+        f"Статус: {status}\n"
+        f"Доступ в приват: {'активен' if purchase_count >= 5 else 'не активен'}\n\n"
+        f"Приглашено друзей: 0\n\n"
+        f"Зарабатывай с нами\n"
+        f"Поделись ссылкой с другом, он зайдёт в бота, а ты попадёшь в реферальную статистику:\n"
+        f"{invite_link}"
+    )
+    await callback.message.edit_text(text, reply_markup=profile_keyboard())
+    await callback.answer()
+
+@dp.callback_query(F.data == "deposit")
+async def deposit_start(callback: CallbackQuery, state: FSMContext):
+    card_details = db.get_setting("card_details") or DEFAULT_CARD_DETAILS
+    await callback.message.edit_text(
+        f"💰 Пополнение баланса\n\n{card_details}\n\nПосле перевода введите сумму пополнения (минимум {MIN_DEPOSIT}₽):",
+        reply_markup=back_to_menu_keyboard()
+    )
+    await state.set_state(DepositStates.waiting_for_amount)
+    await callback.answer()
+
+@dp.message(DepositStates.waiting_for_amount)
+async def process_deposit_amount(message: Message, state: FSMContext):
+    try:
+        amount = float(message.text.replace(",", "."))
+    except ValueError:
+        await message.answer("❌ Пожалуйста, введите корректное число (например, 100).")
+        return
+    if amount < MIN_DEPOSIT:
+        await message.answer(f"❌ Минимальная сумма пополнения {MIN_DEPOSIT}₽. Попробуйте снова.")
+        return
+    await state.update_data(amount=amount)
+    await message.answer("📸 Теперь отправьте скриншот чека (фото или документ).", reply_markup=back_to_menu_keyboard())
+    await state.set_state(DepositStates.waiting_for_screenshot)
+
+@dp.message(DepositStates.waiting_for_screenshot, F.photo | F.document)
+async def process_deposit_screenshot(message: Message, state: FSMContext):
+    if message.photo:
+        file_id = message.photo[-1].file_id
+    elif message.document:
+        file_id = message.document.file_id
+    else:
+        await message.answer("❌ Пожалуйста, отправьте фото или документ.")
+        return
+
+    data = await state.get_data()
+    amount = data.get("amount")
+    user_id = message.from_user.id
+
+    request_id = db.add_deposit_request(user_id, amount, file_id)
+
+    for admin_id in ADMIN_IDS:
+        try:
+            await bot.send_message(
+                admin_id,
+                f"📩 Новая заявка на пополнение!\nID заявки: {request_id}\nПользователь: @{message.from_user.username or 'Без ника'} (ID: {user_id})\nСумма: {amount}₽",
+                reply_markup=admin_deposit_action_keyboard(request_id)
+            )
+            await bot.send_document(admin_id, file_id)
+        except Exception as e:
+            logger.error(f"Не удалось отправить уведомление админу {admin_id}: {e}")
+
+    await message.answer("✅ Ваша заявка на пополнение отправлена. Ожидайте подтверждения администратором.", reply_markup=back_to_menu_keyboard())
+    await state.clear()
+
+# ================== МОИ АККАУНТЫ ==================
+@dp.callback_query(F.data == "my_accounts")
+async def my_accounts(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    purchases = db.get_user_purchases(user_id)
+    if not purchases:
+        await callback.message.edit_text("📭 У вас пока нет купленных аккаунтов.", reply_markup=back_to_menu_keyboard())
+        await callback.answer()
+        return
+    text = "📱 Ваши купленные аккаунты:\n\n"
+    for acc in purchases:
+        purchase_date = acc.get("purchase_date", "")
+        try:
+            dt = datetime.fromisoformat(purchase_date)
+            date_str = dt.strftime("%d.%m.%Y %H:%M")
+        except:
+            date_str = purchase_date
+        text += f"• {acc['number']} ({acc['country']}) – куплен {date_str}, цена {acc['paid_price']}₽\n"
+    await callback.message.edit_text(text, reply_markup=my_accounts_keyboard(purchases))
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("my_acc_"))
+async def my_account_details(callback: CallbackQuery):
+    account_id = int(callback.data.split("_")[2])
+    account = db.get_account(account_id)
+    if not account:
+        await callback.answer("Аккаунт не найден.", show_alert=True)
+        return
+    user_id = callback.from_user.id
+    purchases = db.get_user_purchases(user_id)
+    if not any(a["id"] == account_id for a in purchases):
+        await callback.answer("Это не ваш аккаунт.", show_alert=True)
+        return
+    await callback.message.delete()
+    await send_account_data(user_id, account, caption_extra="")
+    await callback.answer()
+
+# ================== ПРОМОКОД ==================
+@dp.callback_query(F.data == "promocode")
+async def promocode_start(callback: CallbackQuery, state: FSMContext):
+    await callback.message.edit_text("🎫 Введите промокод:\n\nДля отмены отправьте /cancel", reply_markup=back_to_menu_keyboard())
+    await state.set_state(PromocodeStates.waiting_for_code)
+    await callback.answer()
+
+@dp.message(PromocodeStates.waiting_for_code)
+async def process_promocode(message: Message, state: FSMContext):
+    if message.text.lower() == "/cancel":
+        await message.answer("❌ Операция отменена.", reply_markup=back_to_menu_keyboard())
+        await state.clear()
+        return
+    code = message.text.strip().upper()
+    bonus = db.use_promocode(code, message.from_user.id)
+    if bonus is None:
+        await message.answer("❌ Недействительный или уже использованный промокод.", reply_markup=back_to_menu_keyboard())
+    else:
+        await message.answer(f"✅ Промокод активирован! Вы получили {bonus}₽ на баланс.", reply_markup=back_to_menu_keyboard())
+    await state.clear()
+
+# ================== ТОП ПОКУПАТЕЛЕЙ ==================
+@dp.callback_query(F.data == "top_buyers")
+async def top_buyers(callback: CallbackQuery):
+    top = db.get_top_buyers(10)
+    if not top:
+        await callback.message.edit_text("Пока нет покупателей.", reply_markup=back_to_menu_keyboard())
+        await callback.answer()
+        return
+    text = "🏆 Топ покупателей:\n\n"
+    for i, buyer in enumerate(top, 1):
+        text += f"{i}. @{buyer['username']} — {buyer['purchases']} покупок, потрачено {buyer['total_spent']:.2f}₽\n"
+    await callback.message.edit_text(text, reply_markup=back_to_menu_keyboard())
+    await callback.answer()
+
+# ================== ПОДДЕРЖКА ==================
+@dp.callback_query(F.data == "support")
+async def support_start(callback: CallbackQuery, state: FSMContext):
+    await callback.message.edit_text("📞 Напишите ваше сообщение в техподдержку.\nМы ответим вам в ближайшее время.", reply_markup=back_to_menu_keyboard())
+    await state.set_state(SupportStates.waiting_for_message)
+    await callback.answer()
+
+@dp.message(SupportStates.waiting_for_message)
+async def support_receive_message(message: Message, state: FSMContext):
+    user_id = message.from_user.id
+    text = message.text
+    db.add_support_message(user_id, text)
+    username = message.from_user.username or "Без ника"
+    for admin_id in ADMIN_IDS:
+        try:
+            await bot.send_message(
+                admin_id,
+                f"📩 Новое обращение в поддержку!\nОт: @{username} (ID: {user_id})\nСообщение: {text}\n\nДля ответа используйте команду:\n/reply {user_id} <текст>"
+            )
+        except Exception as e:
+            logger.error(f"Не удалось отправить уведомление админу {admin_id}: {e}")
+    await message.answer("✅ Ваше сообщение отправлено. Мы свяжемся с вами в ближайшее время.", reply_markup=back_to_menu_keyboard())
+    await state.clear()
+
+# ================== АДМИН-ПАНЕЛЬ ==================
+@dp.callback_query(F.data == "admin_panel")
+async def admin_panel(callback: CallbackQuery):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer("Доступ запрещён.", show_alert=True)
+        return
+    await callback.message.edit_text("🛠 Админ-панель\nВыберите действие:", reply_markup=admin_panel_keyboard())
+    await callback.answer()
+
+@dp.callback_query(F.data == "admin_deposits")
+async def admin_deposits_list(callback: CallbackQuery):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer("Доступ запрещён.", show_alert=True)
+        return
+    requests = db.get_pending_deposits()
+    if not requests:
+        await callback.message.edit_text("📭 Нет новых заявок на пополнение.", reply_markup=back_to_menu_keyboard())
+        await callback.answer()
+        return
+    text = "💰 Заявки на пополнение:\n\n"
+    for req in requests:
+        user = db.get_user(req["user_id"])
+        username = user["username"] if user else "Неизвестный"
+        text += f"ID {req['id']} | @{username} (ID: {req['user_id']}) | {req['amount']}₽\n"
+    text += "\nВыберите заявку для обработки:"
+    await callback.message.edit_text(text, reply_markup=admin_deposit_keyboard(requests))
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("admin_deposit_"))
+async def admin_deposit_detail(callback: CallbackQuery):
+    request_id = int(callback.data.split("_")[2])
+    self = db
+    self.cursor.execute("SELECT * FROM deposit_requests WHERE id = ?", (request_id,))
+    row = self.cursor.fetchone()
+    if not row:
+        await callback.answer("Заявка не найдена.", show_alert=True)
+        return
+    req = {
+        "id": row[0],
+        "user_id": row[1],
+        "amount": row[2],
+        "screenshot_file_id": row[3],
+        "status": row[4],
+        "created_at": row[5],
+    }
+    user = db.get_user(req["user_id"])
+    username = user["username"] if user else "Неизвестный"
+    text = f"Заявка #{req['id']}\nПользователь: @{username} (ID: {req['user_id']})\nСумма: {req['amount']}₽\nСтатус: {req['status']}\nСоздана: {req['created_at']}"
+    if req["screenshot_file_id"]:
+        await callback.message.delete()
+        await bot.send_document(
+            chat_id=callback.from_user.id,
+            document=req["screenshot_file_id"],
+            caption=text,
+            reply_markup=admin_deposit_action_keyboard(req["id"])
+        )
+    else:
+        await callback.message.edit_text(text, reply_markup=admin_deposit_action_keyboard(req["id"]))
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("approve_deposit_"))
+async def admin_approve_deposit(callback: CallbackQuery):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer("Доступ запрещён.", show_alert=True)
+        return
+    request_id = int(callback.data.split("_")[2])
+    db.approve_deposit(request_id, callback.from_user.id)
+    self = db
+    self.cursor.execute("SELECT user_id, amount FROM deposit_requests WHERE id = ?", (request_id,))
+    row = self.cursor.fetchone()
+    if row:
+        user_id, amount = row
+        try:
+            await bot.send_message(user_id, f"✅ Ваш баланс пополнен на {amount}₽. Спасибо за доверие!")
+        except:
+            pass
+    await callback.message.edit_text("✅ Заявка подтверждена, баланс пополнен.", reply_markup=back_to_menu_keyboard())
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("reject_deposit_"))
+async def admin_reject_deposit(callback: CallbackQuery):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer("Доступ запрещён.", show_alert=True)
+        return
+    request_id = int(callback.data.split("_")[2])
+    db.reject_deposit(request_id, callback.from_user.id)
+    self = db
+    self.cursor.execute("SELECT user_id FROM deposit_requests WHERE id = ?", (request_id,))
+    row = self.cursor.fetchone()
+    if row:
+        try:
+            await bot.send_message(row[0], "❌ Ваша заявка на пополнение отклонена. Проверьте правильность перевода и попробуйте снова.")
+        except:
+            pass
+    await callback.message.edit_text("❌ Заявка отклонена.", reply_markup=back_to_menu_keyboard())
+    await callback.answer()
+
+# ------------------ ДОБАВЛЕНИЕ АККАУНТА (АДМИН) ------------------
+@dp.callback_query(F.data == "admin_add_account")
+async def admin_add_account(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer("Доступ запрещён.", show_alert=True)
+        return
+    await callback.message.edit_text("➕ Добавление нового аккаунта.\nВведите страну (например: РФ):", reply_markup=back_to_menu_keyboard())
+    await state.set_state(AdminAddAccountStates.waiting_country)
+    await callback.answer()
+
+@dp.message(AdminAddAccountStates.waiting_country)
+async def admin_add_country(message: Message, state: FSMContext):
+    await state.update_data(country=message.text.strip())
+    await message.answer("Введите номер телефона (в любом формате):")
+    await state.set_state(AdminAddAccountStates.waiting_number)
+
+@dp.message(AdminAddAccountStates.waiting_number)
+async def admin_add_number(message: Message, state: FSMContext):
+    await state.update_data(number=message.text.strip())
+    await message.answer("Введите код (пароль, пин-код и т.п.):")
+    await state.set_state(AdminAddAccountStates.waiting_code)
+
+@dp.message(AdminAddAccountStates.waiting_code)
+async def admin_add_code(message: Message, state: FSMContext):
+    await state.update_data(code=message.text.strip())
+    await message.answer("Введите дату (например, 2026-07-01):")
+    await state.set_state(AdminAddAccountStates.waiting_date)
+
+@dp.message(AdminAddAccountStates.waiting_date)
+async def admin_add_date(message: Message, state: FSMContext):
+    await state.update_data(date=message.text.strip())
+    await message.answer("Введите цену (число, например 50):")
+    await state.set_state(AdminAddAccountStates.waiting_price)
+
+@dp.message(AdminAddAccountStates.waiting_price)
+async def admin_add_price(message: Message, state: FSMContext):
+    try:
+        price = float(message.text.replace(",", "."))
+    except ValueError:
+        await message.answer("❌ Цена должна быть числом. Попробуйте ещё раз:")
+        return
+    await state.update_data(price=price)
+    await message.answer("Введите описание (инструкция по входу, дополнительная информация):")
+    await state.set_state(AdminAddAccountStates.waiting_description)
+
+@dp.message(AdminAddAccountStates.waiting_description)
+async def admin_add_description(message: Message, state: FSMContext):
+    description = message.text.strip() if message.text and message.text.lower() != "пропустить" else ""
+    await state.update_data(description=description)
+    await message.answer("Теперь отправьте фото для карточки товара (можно пропустить):", reply_markup=back_to_menu_keyboard())
+    await state.set_state(AdminAddAccountStates.waiting_photo)
+
+@dp.message(AdminAddAccountStates.waiting_photo, F.photo | F.text)
+async def admin_add_photo(message: Message, state: FSMContext):
+    if message.text and message.text.lower() == "пропустить":
+        photo_id = None
+    elif message.photo:
+        photo_id = message.photo[-1].file_id
+    else:
+        await message.answer("❌ Пожалуйста, отправьте фото или нажмите «Пропустить».")
+        return
+    await state.update_data(photo_id=photo_id)
+    await message.answer("Теперь отправьте дополнительный файл (инструкция, скриншот) или нажмите «Пропустить».", reply_markup=back_to_menu_keyboard())
+    await state.set_state(AdminAddAccountStates.waiting_file)
+
+@dp.message(AdminAddAccountStates.waiting_file)
+async def admin_add_file(message: Message, state: FSMContext):
+    file_id = None
+    if message.document:
+        file_id = message.document.file_id
+    elif message.photo:
+        file_id = message.photo[-1].file_id
+    elif message.video:
+        file_id = message.video.file_id
+    elif message.audio:
+        file_id = message.audio.file_id
+    elif message.text and message.text.lower() == "пропустить":
+        pass
+    else:
+        await message.answer("Пожалуйста, отправьте файл или нажмите «Пропустить».")
+        return
+    await state.update_data(file_id=file_id)
+    await message.answer("Это аккаунт с отлетой? (да/нет)", reply_markup=back_to_menu_keyboard())
+    await state.set_state(AdminAddAccountStates.waiting_departure)
+
+@dp.message(AdminAddAccountStates.waiting_departure)
+async def admin_add_departure(message: Message, state: FSMContext):
+    is_departure = message.text.lower() in ["да", "yes", "true", "1"]
+    data = await state.get_data()
+    db.add_account(
+        country=data["country"],
+        number=data["number"],
+        code=data["code"],
+        date=data["date"],
+        price=data["price"],
+        description=data["description"],
+        file_id=data.get("file_id"),
+        photo_id=data.get("photo_id"),
+        admin_id=message.from_user.id,
+        is_departure=is_departure
+    )
+    await message.answer(
+        f"✅ Аккаунт добавлен!\nСтрана: {data['country']}\nНомер: {data['number']}\nКод: {data['code']}\nДата: {data['date']}\nЦена: {data['price']}₽\nОписание: {data['description'] or 'Нет'}\nС отлетой: {'Да' if is_departure else 'Нет'}",
+        reply_markup=back_to_menu_keyboard()
+    )
+    await state.clear()
+
+# ------------------ СТАТИСТИКА ------------------
+@dp.callback_query(F.data == "admin_stats")
+async def admin_stats(callback: CallbackQuery):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer("Доступ запрещён.", show_alert=True)
+        return
+    total_revenue = db.get_total_revenue()
+    total_purchases = db.get_total_purchases()
+    total_users = db.get_all_users_count()
+    await callback.message.edit_text(
+        f"📊 Статистика магазина:\n\nВсего пользователей: {total_users}\nВсего продаж: {total_purchases}\nОбщая выручка: {total_revenue:.2f}₽",
+        reply_markup=back_to_menu_keyboard()
+    )
+    await callback.answer()
+
+# ------------------ МОЙ БАЛАНС (АДМИН) ------------------
+@dp.callback_query(F.data == "admin_balance")
+async def admin_balance(callback: CallbackQuery):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer("Доступ запрещён.", show_alert=True)
+        return
+    admin_id = callback.from_user.id
+    balance = db.get_admin_balance(admin_id)
+    total_earned = db.get_admin_total_earned(admin_id)
+    await callback.message.edit_text(
+        f"💵 Ваш баланс:\n\nДоступно к выводу: {balance:.2f}₽\nВсего заработано: {total_earned:.2f}₽",
+        reply_markup=back_to_menu_keyboard()
+    )
+    await callback.answer()
+
+# ------------------ ВЫВОД СРЕДСТВ ------------------
+@dp.callback_query(F.data == "admin_withdraw")
+async def admin_withdraw(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer("Доступ запрещён.", show_alert=True)
+        return
+    await callback.message.edit_text("💸 Введите сумму для вывода (доступный баланс можно посмотреть в разделе «Мой баланс»):", reply_markup=back_to_menu_keyboard())
+    await state.set_state(AdminWithdrawStates.waiting_amount)
+    await callback.answer()
+
+@dp.message(AdminWithdrawStates.waiting_amount)
+async def admin_withdraw_amount(message: Message, state: FSMContext):
+    try:
+        amount = float(message.text.replace(",", "."))
+    except ValueError:
+        await message.answer("❌ Введите корректную сумму (число).")
+        return
+    admin_id = message.from_user.id
+    balance = db.get_admin_balance(admin_id)
+    if amount <= 0:
+        await message.answer("❌ Сумма должна быть положительной.")
+        return
+    if amount > balance:
+        await message.answer(f"❌ У вас недостаточно средств. Доступно: {balance:.2f}₽")
+        return
+
+    for admin in ADMIN_IDS:
+        if admin != admin_id:
+            try:
+                await bot.send_message(
+                    admin,
+                    f"💸 Запрос на вывод средств!\nАдмин: @{message.from_user.username} (ID: {admin_id})\nСумма: {amount}₽\nОбработайте запрос вручную."
+                )
+            except:
+                pass
+
+    db.cursor.execute("UPDATE admin_balances SET balance = balance - ? WHERE admin_id = ?", (amount, admin_id))
+    db.conn.commit()
+    await message.answer(f"✅ Запрос на вывод {amount}₽ отправлен. Ожидайте обработки.", reply_markup=back_to_menu_keyboard())
+    await state.clear()
+
+# ------------------ ОТВЕТ В ПОДДЕРЖКУ (АДМИН) ------------------
 @dp.callback_query(F.data == "admin_support_reply")
 async def admin_support_reply(callback: CallbackQuery):
     if callback.from_user.id not in ADMIN_IDS:
@@ -909,7 +1455,6 @@ async def admin_reply_support_process(message: Message, state: FSMContext):
     msg_id = data.get("support_msg_id")
     answer_text = message.text
     admin_id = message.from_user.id
-    # Отправляем ответ пользователю
     self = db
     self.cursor.execute("SELECT user_id FROM support_messages WHERE id = ?", (msg_id,))
     row = self.cursor.fetchone()
@@ -923,7 +1468,7 @@ async def admin_reply_support_process(message: Message, state: FSMContext):
     await message.answer("✅ Ответ отправлен пользователю.", reply_markup=back_to_menu_keyboard())
     await state.clear()
 
-# Создание промокода
+# ------------------ СОЗДАНИЕ ПРОМОКОДА (АДМИН) ------------------
 @dp.callback_query(F.data == "admin_create_promo")
 async def admin_create_promo(callback: CallbackQuery, state: FSMContext):
     if callback.from_user.id not in ADMIN_IDS:
@@ -970,16 +1515,12 @@ async def admin_promo_expiry(message: Message, state: FSMContext):
     data = await state.get_data()
     db.add_promocode(data["code"], data["bonus"], data["limit"], expires)
     await message.answer(
-        f"✅ Промокод создан!\n"
-        f"Код: {data['code']}\n"
-        f"Бонус: {data['bonus']}₽\n"
-        f"Лимит: {data['limit']}\n"
-        f"Истекает: {expires or 'никогда'}",
+        f"✅ Промокод создан!\nКод: {data['code']}\nБонус: {data['bonus']}₽\nЛимит: {data['limit']}\nИстекает: {expires or 'никогда'}",
         reply_markup=back_to_menu_keyboard()
     )
     await state.clear()
 
-# Изменение баннера
+# ------------------ ИЗМЕНЕНИЕ БАННЕРА (АДМИН) ------------------
 @dp.callback_query(F.data == "admin_change_banner")
 async def admin_change_banner(callback: CallbackQuery, state: FSMContext):
     if callback.from_user.id not in ADMIN_IDS:
@@ -1015,7 +1556,7 @@ async def admin_banner_description(message: Message, state: FSMContext):
     await message.answer("✅ Баннер обновлён!", reply_markup=back_to_menu_keyboard())
     await state.clear()
 
-# Изменение описания магазина
+# ------------------ ИЗМЕНЕНИЕ ОПИСАНИЯ (АДМИН) ------------------
 @dp.callback_query(F.data == "admin_change_desc")
 async def admin_change_desc(callback: CallbackQuery, state: FSMContext):
     if callback.from_user.id not in ADMIN_IDS:
@@ -1035,7 +1576,7 @@ async def admin_change_desc_process(message: Message, state: FSMContext):
     await message.answer("✅ Описание обновлено!", reply_markup=back_to_menu_keyboard())
     await state.clear()
 
-# Реквизиты админа
+# ------------------ МОИ РЕКВИЗИТЫ (АДМИН) ------------------
 @dp.callback_query(F.data == "admin_my_details")
 async def admin_my_details(callback: CallbackQuery, state: FSMContext):
     if callback.from_user.id not in ADMIN_IDS:
@@ -1088,6 +1629,19 @@ async def admin_details_name(message: Message, state: FSMContext):
         message.text.strip()
     )
     await message.answer("✅ Реквизиты сохранены!", reply_markup=back_to_menu_keyboard())
+    await state.clear()
+
+# ------------------ ОТЗЫВЫ ------------------
+@dp.callback_query(F.data == "leave_review")
+async def leave_review(callback: CallbackQuery, state: FSMContext):
+    await callback.message.edit_text("✍️ Напишите ваш отзыв о покупке. Мы будем рады услышать ваше мнение!", reply_markup=back_to_menu_keyboard())
+    await state.set_state(ReviewStates.waiting_for_review)
+    await callback.answer()
+
+@dp.message(ReviewStates.waiting_for_review)
+async def process_review(message: Message, state: FSMContext):
+    db.add_review(message.from_user.id, message.text)
+    await message.answer("✅ Спасибо за ваш отзыв! Он помогает нам становиться лучше.", reply_markup=back_to_menu_keyboard())
     await state.clear()
 
 # ================== ЗАПУСК БОТА + ВЕБ-СЕРВЕР ==================
