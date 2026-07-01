@@ -12,10 +12,14 @@ from aiogram.types import Message, CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.utils.markdown import hbold
 from aiohttp import web
+import aiohttp
 
 # ================== КОНФИГУРАЦИЯ ==================
 BOT_TOKEN = "8918867676:AAHixz0SseKQ9eqV99oDPI-CTwdQsXrO9mI"
 ADMIN_IDS = [7727618205, 8297446667, 911874462]
+
+# Прямая ссылка на баннер
+BANNER_URL = "https://i.ibb.co/Z6ncFwvq/A42-A26-FA-C9-A4-4-F02-A401-D2-D5-C2097-D2-B.png"
 
 DEFAULT_CARD_DETAILS = """
 💳 Реквизиты для пополнения баланса:
@@ -30,20 +34,20 @@ DEFAULT_CARD_DETAILS = """
 MIN_DEPOSIT = 40
 STATUSES = [(0, "🟢 Новый клиент"), (3, "⭐ Постоянный клиент"), (10, "🔥 VIP клиент"), (25, "👑 Легенда")]
 
-# ================== СПИСОК СТРАН С ЭМОДЗИ ==================
+# ================== СПИСОК СТРАН ==================
 COUNTRIES = [
-    ("🇷🇺 РФ", "РФ"),
-    ("🇰🇿 КЗ", "КЗ"),
-    ("🇺🇦 УКР", "УКР"),
-    ("🇧🇾 Беларусь", "Беларусь"),
-    ("🇺🇿 Узбекистан", "Узбекистан"),
-    ("🇦🇿 Азербайджан", "Азербайджан"),
-    ("🇺🇸 США", "США"),
-    ("🇮🇶 Ирак", "Ирак"),
-    ("🇮🇷 Иран", "Иран"),
-    ("🇮🇳 Индия", "Индия"),
-    ("🇵🇱 Польша", "Польша"),
-    ("🇸🇪 Швеция", "Швеция"),
+    ("🇷🇺", "РФ"),
+    ("🇰🇿", "КЗ"),
+    ("🇺🇦", "УКР"),
+    ("🇧🇾", "Беларусь"),
+    ("🇺🇿", "Узбекистан"),
+    ("🇦🇿", "Азербайджан"),
+    ("🇺🇸", "США"),
+    ("🇮🇶", "Ирак"),
+    ("🇮🇷", "Иран"),
+    ("🇮🇳", "Индия"),
+    ("🇵🇱", "Польша"),
+    ("🇸🇪", "Швеция"),
 ]
 
 COUNTRIES_PER_PAGE = 4
@@ -415,6 +419,11 @@ class Database:
                             (photo_id, title, description))
         self.conn.commit()
 
+    def has_banner(self) -> bool:
+        self.cursor.execute("SELECT COUNT(*) FROM banners WHERE is_active = 1")
+        row = self.cursor.fetchone()
+        return row[0] > 0 if row else False
+
     # ------------------ НАСТРОЙКИ ------------------
     def get_setting(self, key: str) -> Optional[str]:
         self.cursor.execute("SELECT value FROM shop_settings WHERE key = ?", (key,))
@@ -485,6 +494,45 @@ class Database:
 
 db = Database("fizer_shop.db")
 
+# ================== ФУНКЦИЯ ЗАГРУЗКИ БАННЕРА ПО ССЫЛКЕ ==================
+async def download_and_set_banner():
+    """Скачивает баннер по ссылке и сохраняет в базу"""
+    try:
+        # Проверяем, есть ли уже баннер
+        if db.has_banner():
+            logger.info("Баннер уже есть в базе, пропускаем загрузку")
+            return
+
+        logger.info(f"Загрузка баннера с {BANNER_URL}")
+        async with aiohttp.ClientSession() as session:
+            async with session.get(BANNER_URL) as resp:
+                if resp.status == 200:
+                    # Скачиваем изображение
+                    image_data = await resp.read()
+                    # Отправляем фото в Telegram, чтобы получить file_id
+                    from io import BytesIO
+                    photo_file = BytesIO(image_data)
+                    photo_file.name = "banner.jpg"
+                    
+                    # Отправляем фото боту
+                    sent_message = await bot.send_photo(
+                        chat_id=ADMIN_IDS[0],  # отправляем первому админу
+                        photo=photo_file,
+                        caption="🖼 Баннер загружен автоматически!"
+                    )
+                    photo_id = sent_message.photo[-1].file_id
+                    
+                    # Сохраняем баннер в базу
+                    db.set_banner(photo_id, "Fiz-shop", "Добро пожаловать в Fiz-shop!")
+                    logger.info("Баннер успешно загружен и сохранён")
+                    
+                    # Удаляем сообщение с фото (чтобы не засорять чат)
+                    await bot.delete_message(ADMIN_IDS[0], sent_message.message_id)
+                else:
+                    logger.error(f"Ошибка загрузки баннера: статус {resp.status}")
+    except Exception as e:
+        logger.error(f"Ошибка при загрузке баннера: {e}")
+
 # ================== КЛАВИАТУРЫ ==================
 def main_menu_keyboard(user_id: int):
     builder = InlineKeyboardBuilder()
@@ -538,7 +586,7 @@ def account_keyboard(accounts: List[Dict[str, Any]], departure: bool = False):
             price_emoji = "🟡"
         else:
             price_emoji = "🔴"
-        text = f"{acc['country']} {acc['number']} {price_emoji} {acc['price']}₽"
+        text = f"{acc['number']} {price_emoji} {acc['price']}₽"
         builder.button(text=text, callback_data=f"buy_account_{acc['id']}")
     builder.button(text="🔙 Назад", callback_data="accounts" if not departure else "accounts_departure")
     builder.adjust(1)
@@ -688,15 +736,21 @@ class AdminMyDetailsStates(StatesGroup):
 
 # ================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==================
 async def send_account_data(chat_id: int, account: Dict[str, Any], caption_extra: str = ""):
+    description_text = account.get("description", "Нет")
+    if description_text and description_text != "Нет":
+        description_formatted = f"\n📝 <b>Описание:</b>\n<blockquote>{description_text}</blockquote>"
+    else:
+        description_formatted = "\n📝 <b>Описание:</b> Нет"
+
     code_spoiler = f'<span class="tg-spoiler">{account["code"]}</span>'
     text = (
-        f"📱 Данные аккаунта:\n\n"
-        f"Страна: {account['country']}\n"
-        f"Номер: {account['number']}\n"
-        f"Код: {code_spoiler}\n"
-        f"Дата: {account['date']}\n"
-        f"Описание: {account['description'] or 'Нет'}\n"
-        f"Цена: {account['price']}₽\n"
+        f"📱 <b>Данные аккаунта</b>\n\n"
+        f"🌍 <b>Страна:</b> {account['country']}\n"
+        f"📞 <b>Номер:</b> {account['number']}\n"
+        f"🔑 <b>Код:</b> {code_spoiler}\n"
+        f"📅 <b>Дата:</b> {account['date']}\n"
+        f"{description_formatted}\n"
+        f"💰 <b>Цена:</b> {account['price']}₽\n"
         f"{caption_extra}"
     )
     photo_id = account.get("photo_id")
@@ -833,10 +887,10 @@ async def select_country(callback: CallbackQuery):
         await callback.answer()
         return
     accounts.sort(key=lambda x: x["price"])
-    text = f"📱 Доступные аккаунты ({country}):\n\n"
+    text = f"📱 <b>Доступные аккаунты ({country}):</b>\n\n"
     for acc in accounts:
         text += f"• {acc['number']} — {acc['price']}₽\n"
-    await callback.message.edit_text(text, reply_markup=account_keyboard(accounts, departure=is_departure))
+    await callback.message.edit_text(text, reply_markup=account_keyboard(accounts, departure=is_departure), parse_mode="HTML")
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("buy_account_"))
@@ -857,9 +911,14 @@ async def buy_account(callback: CallbackQuery):
         )
         return
     text = (
-        f"Вы выбрали аккаунт:\nСтрана: {account['country']}\nНомер: {account['number']}\nЦена: {account['price']}₽\nБаланс: {balance:.2f}₽\n\nПодтвердите покупку:"
+        f"<b>Вы выбрали аккаунт:</b>\n\n"
+        f"🌍 Страна: {account['country']}\n"
+        f"📞 Номер: {account['number']}\n"
+        f"💰 Цена: {account['price']}₽\n"
+        f"💳 Баланс: {balance:.2f}₽\n\n"
+        "Подтвердите покупку:"
     )
-    await callback.message.edit_text(text, reply_markup=payment_keyboard(account_id))
+    await callback.message.edit_text(text, reply_markup=payment_keyboard(account_id), parse_mode="HTML")
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("pay_"))
@@ -890,11 +949,11 @@ async def show_reviews(callback: CallbackQuery):
     if not reviews:
         text = "⭐ Пока нет отзывов. Будьте первым!"
     else:
-        text = "⭐ Отзывы наших клиентов:\n\n"
+        text = "⭐ <b>Отзывы наших клиентов</b>\n\n"
         for rev in reviews:
             stars = "⭐" * rev["rating"]
-            text += f"👤 {rev['username']}\n{stars}\n{rev['review_text']}\n\n"
-    await callback.message.edit_text(text, reply_markup=review_keyboard())
+            text += f"👤 <b>{rev['username']}</b>\n{stars}\n<blockquote>{rev['review_text']}</blockquote>\n\n"
+    await callback.message.edit_text(text, reply_markup=review_keyboard(), parse_mode="HTML")
     await callback.answer()
 
 @dp.callback_query(F.data == "leave_review")
@@ -950,27 +1009,28 @@ async def profile(callback: CallbackQuery):
     invite_link = f"https://t.me/{bot_username}?start=ref_{user_id}"
 
     text = (
-        f"👤 Твой профиль\n\n"
-        f"ID: {user_id}\n"
-        f"Имя: {username}\n"
-        f"Юзернейм: @{username if username != 'Без ника' else 'не указан'}\n\n"
-        f"Покупок всего: {purchase_count}\n"
-        f"Статус: {status}\n"
-        f"Доступ в приват: {'активен' if purchase_count >= 5 else 'не активен'}\n\n"
-        f"Приглашено друзей: 0\n\n"
-        f"Зарабатывай с нами\n"
+        f"👤 <b>Твой профиль</b>\n\n"
+        f"🆔 ID: {user_id}\n"
+        f"👤 Имя: {username}\n"
+        f"📛 Юзернейм: @{username if username != 'Без ника' else 'не указан'}\n\n"
+        f"📦 Покупок всего: {purchase_count}\n"
+        f"🏅 Статус: {status}\n"
+        f"🔒 Доступ в приват: {'активен' if purchase_count >= 5 else 'не активен'}\n\n"
+        f"👥 Приглашено друзей: 0\n\n"
+        f"💰 Зарабатывай с нами\n"
         f"Поделись ссылкой с другом, он зайдёт в бота, а ты попадёшь в реферальную статистику:\n"
         f"{invite_link}"
     )
-    await callback.message.edit_text(text, reply_markup=profile_keyboard())
+    await callback.message.edit_text(text, reply_markup=profile_keyboard(), parse_mode="HTML")
     await callback.answer()
 
 @dp.callback_query(F.data == "deposit")
 async def deposit_start(callback: CallbackQuery, state: FSMContext):
     card_details = db.get_setting("card_details") or DEFAULT_CARD_DETAILS
     await callback.message.edit_text(
-        f"💰 Пополнение баланса\n\n{card_details}\n\nПосле перевода введите сумму пополнения (минимум {MIN_DEPOSIT}₽):",
-        reply_markup=back_to_menu_keyboard()
+        f"💰 <b>Пополнение баланса</b>\n\n{card_details}\n\nПосле перевода введите сумму пополнения (минимум {MIN_DEPOSIT}₽):",
+        reply_markup=back_to_menu_keyboard(),
+        parse_mode="HTML"
     )
     await state.set_state(DepositStates.waiting_for_amount)
     await callback.answer()
@@ -1025,7 +1085,7 @@ async def my_accounts(callback: CallbackQuery):
         await callback.message.edit_text("📭 У вас пока нет купленных аккаунтов.", reply_markup=back_to_menu_keyboard())
         await callback.answer()
         return
-    text = "📱 Ваши купленные аккаунты:\n\n"
+    text = "📱 <b>Ваши купленные аккаунты</b>\n\n"
     for acc in purchases:
         purchase_date = acc.get("purchase_date", "")
         try:
@@ -1034,7 +1094,7 @@ async def my_accounts(callback: CallbackQuery):
         except:
             date_str = purchase_date
         text += f"• {acc['number']} ({acc['country']}) – куплен {date_str}, цена {acc['paid_price']}₽\n"
-    await callback.message.edit_text(text, reply_markup=my_accounts_keyboard(purchases))
+    await callback.message.edit_text(text, reply_markup=my_accounts_keyboard(purchases), parse_mode="HTML")
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("my_acc_"))
@@ -1080,10 +1140,10 @@ async def top_buyers(callback: CallbackQuery):
         await callback.message.edit_text("Пока нет покупателей.", reply_markup=back_to_menu_keyboard())
         await callback.answer()
         return
-    text = "🏆 Топ покупателей:\n\n"
+    text = "🏆 <b>Топ покупателей</b>\n\n"
     for i, buyer in enumerate(top, 1):
         text += f"{i}. @{buyer['username']} — {buyer['purchases']} покупок, потрачено {buyer['total_spent']:.2f}₽\n"
-    await callback.message.edit_text(text, reply_markup=back_to_menu_keyboard())
+    await callback.message.edit_text(text, reply_markup=back_to_menu_keyboard(), parse_mode="HTML")
     await callback.answer()
 
 @dp.callback_query(F.data == "support")
@@ -1609,6 +1669,9 @@ async def admin_details_name(message: Message, state: FSMContext):
 
 # ================== ЗАПУСК БОТА + ВЕБ-СЕРВЕР ==================
 async def main():
+    # Сначала загружаем баннер
+    await download_and_set_banner()
+    
     from aiohttp import web
 
     async def health_check(request):
