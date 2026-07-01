@@ -8,7 +8,7 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.utils.markdown import hbold
 from aiohttp import web
@@ -20,7 +20,7 @@ ADMIN_IDS = [7727618205, 8297446667, 911874462]
 DEFAULT_CARD_DETAILS = """
 💳 Реквизиты для пополнения баланса:
 
-Номер : 79090990775
+Номер карты: 79090990775
 Получатель: Кирил Алексеевич Р.
 Банк: Тинькофф
 
@@ -28,7 +28,26 @@ DEFAULT_CARD_DETAILS = """
 """
 
 MIN_DEPOSIT = 40
-STATUSES = [(0, "Новый клиент"), (3, "Постоянный клиент"), (10, "VIP клиент"), (25, "Легенда")]
+STATUSES = [(0, "🟢 Новый клиент"), (3, "⭐ Постоянный клиент"), (10, "🔥 VIP клиент"), (25, "👑 Легенда")]
+
+# ================== СПИСОК СТРАН С ЭМОДЗИ ==================
+COUNTRIES = [
+    ("🇷🇺 РФ", "РФ"),
+    ("🇰🇿 КЗ", "КЗ"),
+    ("🇺🇦 УКР", "УКР"),
+    ("🇧🇾 Беларусь", "Беларусь"),
+    ("🇺🇿 Узбекистан", "Узбекистан"),
+    ("🇦🇿 Азербайджан", "Азербайджан"),
+    ("🇺🇸 США", "США"),
+    ("🇮🇶 Ирак", "Ирак"),
+    ("🇮🇷 Иран", "Иран"),
+    ("🇮🇳 Индия", "Индия"),
+    ("🇵🇱 Польша", "Польша"),
+    ("🇸🇪 Швеция", "Швеция"),
+]
+
+# Количество стран на одной странице
+COUNTRIES_PER_PAGE = 4
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -44,6 +63,7 @@ class Database:
         self._create_tables()
 
     def _create_tables(self):
+        # Пользователи
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY,
@@ -54,6 +74,7 @@ class Database:
                 promo_used INTEGER DEFAULT 0
             )
         """)
+        # Аккаунты
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS accounts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -71,6 +92,7 @@ class Database:
                 is_departure BOOLEAN DEFAULT 0
             )
         """)
+        # Покупки
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS purchases (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -81,14 +103,18 @@ class Database:
                 admin_earned REAL DEFAULT 0
             )
         """)
+        # Отзывы с рейтингом
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS reviews (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER REFERENCES users(id),
+                username TEXT,
+                rating INTEGER CHECK(rating >= 1 AND rating <= 5),
                 review_text TEXT,
                 created_at TEXT
             )
         """)
+        # Поддержка
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS support_messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -101,6 +127,7 @@ class Database:
                 answer_admin_id INTEGER
             )
         """)
+        # Заявки на пополнение
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS deposit_requests (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -113,6 +140,7 @@ class Database:
                 admin_id INTEGER
             )
         """)
+        # Баланс админов
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS admin_balances (
                 admin_id INTEGER PRIMARY KEY,
@@ -120,6 +148,7 @@ class Database:
                 total_earned REAL DEFAULT 0
             )
         """)
+        # Реквизиты админов
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS admin_withdraw_details (
                 admin_id INTEGER PRIMARY KEY,
@@ -129,6 +158,7 @@ class Database:
                 full_name TEXT
             )
         """)
+        # Промокоды
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS promocodes (
                 code TEXT PRIMARY KEY,
@@ -138,6 +168,7 @@ class Database:
                 expires_at TEXT
             )
         """)
+        # Баннеры
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS banners (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -147,6 +178,7 @@ class Database:
                 is_active BOOLEAN DEFAULT 1
             )
         """)
+        # Настройки магазина
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS shop_settings (
                 key TEXT PRIMARY KEY,
@@ -192,7 +224,7 @@ class Database:
         for threshold, status in STATUSES:
             if count >= threshold:
                 return status
-        return "Новый клиент"
+        return "🟢 Новый клиент"
 
     # ------------------ АККАУНТЫ ------------------
     def get_available_accounts(self, country: str = None, departure: bool = False) -> List[Dict[str, Any]]:
@@ -271,6 +303,30 @@ class Database:
                 "purchase_date": row[13], "paid_price": row[14]
             })
         return purchases
+
+    # ------------------ ОТЗЫВЫ (НОВЫЕ МЕТОДЫ) ------------------
+    def add_review(self, user_id: int, username: str, rating: int, text: str):
+        now = datetime.now().isoformat()
+        self.cursor.execute(
+            "INSERT INTO reviews (user_id, username, rating, review_text, created_at) VALUES (?, ?, ?, ?, ?)",
+            (user_id, username, rating, text, now)
+        )
+        self.conn.commit()
+
+    def get_all_reviews(self, limit: int = 50) -> List[Dict[str, Any]]:
+        self.cursor.execute("SELECT * FROM reviews ORDER BY created_at DESC LIMIT ?", (limit,))
+        rows = self.cursor.fetchall()
+        reviews = []
+        for row in rows:
+            reviews.append({
+                "id": row[0],
+                "user_id": row[1],
+                "username": row[2],
+                "rating": row[3],
+                "review_text": row[4],
+                "created_at": row[5]
+            })
+        return reviews
 
     # ------------------ ЗАЯВКИ НА ПОПОЛНЕНИЕ ------------------
     def add_deposit_request(self, user_id: int, amount: float, screenshot_file_id: str):
@@ -447,11 +503,12 @@ def main_menu_keyboard(user_id: int):
     builder.button(text="📱 Аккаунты", callback_data="accounts")
     builder.button(text="✈️ Аккаунты с отлетой", callback_data="accounts_departure")
     builder.button(text="👤 Профиль", callback_data="profile")
+    builder.button(text="⭐ Отзывы", callback_data="reviews")
     builder.button(text="🎫 Промокод", callback_data="promocode")
     builder.button(text="🏆 Топ покупателей", callback_data="top_buyers")
     builder.button(text="📞 Поддержка", callback_data="support")
     if user_id in ADMIN_IDS:
-        builder.button(text="🛠 Админ-панель", callback_data="admin_panel")
+        builder.button(text="⚙️ Админ-панель", callback_data="admin_panel")
     builder.adjust(2)
     return builder.as_markup()
 
@@ -460,19 +517,44 @@ def back_to_menu_keyboard():
     builder.button(text="🔙 Назад", callback_data="main_menu")
     return builder.as_markup()
 
-def country_keyboard(departure: bool = False):
-    countries = ["РФ", "КЗ", "УКР", "Беларусь", "Узбекистан", "Азербайджан"]
+def country_keyboard(departure: bool = False, page: int = 0):
     builder = InlineKeyboardBuilder()
-    for country in countries:
-        builder.button(text=country, callback_data=f"country_{country}_{1 if departure else 0}")
+    total_countries = len(COUNTRIES)
+    start = page * COUNTRIES_PER_PAGE
+    end = min(start + COUNTRIES_PER_PAGE, total_countries)
+    for i in range(start, end):
+        emoji, country = COUNTRIES[i]
+        if country in ["США", "Ирак", "Иран", "Индия", "Польша", "Швеция"]:
+            display = f"{emoji} {country} 🔴"
+        else:
+            display = f"{emoji} {country}"
+        builder.button(text=display, callback_data=f"country_{country}_{1 if departure else 0}")
+    # Навигационные кнопки
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(("◀️ Назад", f"country_page_{page-1}_{1 if departure else 0}"))
+    if end < total_countries:
+        nav_buttons.append(("Вперед ▶️", f"country_page_{page+1}_{1 if departure else 0}"))
+    if nav_buttons:
+        for text, callback in nav_buttons:
+            builder.button(text=text, callback_data=callback)
     builder.button(text="🔙 Назад", callback_data="main_menu")
-    builder.adjust(2)
+    builder.adjust(2)  # 2 кнопки в ряду для стран, навигационные сами по себе
+    # Для навигации делаем отдельный ряд
+    # Можно просто добавить их в конец, они будут в ряду по 2
     return builder.as_markup()
 
 def account_keyboard(accounts: List[Dict[str, Any]], departure: bool = False):
     builder = InlineKeyboardBuilder()
     for acc in accounts:
-        builder.button(text=f"{acc['country']} - {acc['number']} ({acc['price']}₽)", callback_data=f"buy_account_{acc['id']}")
+        if acc["price"] < 50:
+            price_emoji = "🟢"
+        elif acc["price"] < 100:
+            price_emoji = "🟡"
+        else:
+            price_emoji = "🔴"
+        text = f"{acc['country']} {acc['number']} {price_emoji} {acc['price']}₽"
+        builder.button(text=text, callback_data=f"buy_account_{acc['id']}")
     builder.button(text="🔙 Назад", callback_data="accounts" if not departure else "accounts_departure")
     builder.adjust(1)
     return builder.as_markup()
@@ -483,10 +565,19 @@ def payment_keyboard(account_id: int):
     builder.button(text="🔙 Назад", callback_data="accounts")
     return builder.as_markup()
 
+def rating_keyboard():
+    builder = InlineKeyboardBuilder()
+    for i in range(1, 6):
+        stars = "⭐" * i
+        builder.button(text=stars, callback_data=f"rating_{i}")
+    builder.button(text="🔙 Назад", callback_data="main_menu")
+    builder.adjust(5)
+    return builder.as_markup()
+
 def review_keyboard():
     builder = InlineKeyboardBuilder()
     builder.button(text="✍️ Оставить отзыв", callback_data="leave_review")
-    builder.button(text="🏠 В главное меню", callback_data="main_menu")
+    builder.button(text="🔙 Назад", callback_data="main_menu")
     return builder.as_markup()
 
 def admin_panel_keyboard():
@@ -564,7 +655,8 @@ class DepositStates(StatesGroup):
     waiting_for_screenshot = State()
 
 class ReviewStates(StatesGroup):
-    waiting_for_review = State()
+    waiting_for_rating = State()
+    waiting_for_text = State()
 
 class SupportStates(StatesGroup):
     waiting_for_message = State()
@@ -645,12 +737,12 @@ async def send_welcome_message(chat_id: int):
     banner = db.get_active_banner()
     welcome_text = db.get_setting("welcome_text") or "Добро пожаловать в Fiz-shop!"
     main_text = (
-        f"{hbold('Fiz-shop')}\n\n"
+        f"{hbold('🔥 Fiz-shop')}\n\n"
         f"<blockquote>{welcome_text}</blockquote>\n\n"
         "— Почему именно мы:\n"
-        "  • Более 5+ живых отзывов\n"
-        "  • Молниеносная выдача\n"
-        "  • dont\n\n"
+        "  • ✅ Более 5+ живых отзывов\n"
+        "  • ⚡ Молниеносная выдача\n"
+        "  • 🎁 dont\n\n"
         "Выбери раздел ниже, чтобы продолжить:"
     )
     if banner and banner.get("photo_id"):
@@ -662,7 +754,12 @@ async def send_welcome_message(chat_id: int):
             parse_mode="HTML"
         )
     else:
-        await bot.send_message(chat_id, main_text, reply_markup=main_menu_keyboard(chat_id), parse_mode="HTML")
+        await bot.send_message(
+            chat_id,
+            main_text,
+            reply_markup=main_menu_keyboard(chat_id),
+            parse_mode="HTML"
+        )
 
 # ================== ОБРАБОТЧИКИ КОМАНД ==================
 @dp.message(Command("start"))
@@ -686,7 +783,7 @@ async def cmd_admin(message: Message):
     if message.from_user.id not in ADMIN_IDS:
         await message.answer("❌ У вас нет прав администратора.")
         return
-    await message.answer("🛠 Админ-панель Fiz-shop\nВыберите действие:", reply_markup=admin_panel_keyboard())
+    await message.answer("⚙️ Админ-панель Fiz-shop\nВыберите действие:", reply_markup=admin_panel_keyboard())
 
 @dp.message(Command("reply"))
 async def cmd_reply(message: Message):
@@ -709,7 +806,7 @@ async def cmd_reply(message: Message):
     except Exception as e:
         await message.answer(f"❌ Ошибка отправки: {e}")
 
-# ================== ОБРАБОТЧИКИ CALLBACK (ПОЛНЫЙ НАБОР) ==================
+# ================== ОБРАБОТЧИКИ CALLBACK ==================
 @dp.callback_query(F.data == "main_menu")
 async def main_menu(callback: CallbackQuery):
     await send_welcome_message(callback.from_user.id)
@@ -718,12 +815,24 @@ async def main_menu(callback: CallbackQuery):
 
 @dp.callback_query(F.data == "accounts")
 async def accounts_menu(callback: CallbackQuery):
-    await callback.message.edit_text("🌍 Выберите страну аккаунта:", reply_markup=country_keyboard(departure=False))
+    await callback.message.edit_text("🌍 Выберите страну аккаунта:", reply_markup=country_keyboard(departure=False, page=0))
     await callback.answer()
 
 @dp.callback_query(F.data == "accounts_departure")
 async def accounts_departure_menu(callback: CallbackQuery):
-    await callback.message.edit_text("✈️ Аккаунты с отлетой\nВыберите страну:", reply_markup=country_keyboard(departure=True))
+    await callback.message.edit_text("✈️ Аккаунты с отлетой\nВыберите страну:", reply_markup=country_keyboard(departure=True, page=0))
+    await callback.answer()
+
+# Обработчик пагинации стран
+@dp.callback_query(F.data.startswith("country_page_"))
+async def country_page_callback(callback: CallbackQuery):
+    parts = callback.data.split("_")
+    page = int(parts[2])
+    departure = bool(int(parts[3]))
+    await callback.message.edit_text(
+        "🌍 Выберите страну аккаунта:" if not departure else "✈️ Аккаунты с отлетой\nВыберите страну:",
+        reply_markup=country_keyboard(departure=departure, page=page)
+    )
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("country_"))
@@ -752,7 +861,7 @@ async def buy_account(callback: CallbackQuery):
     account = db.get_account(account_id)
     if not account or account["is_sold"]:
         await callback.answer("Этого аккаунта уже нет в наличии.", show_alert=True)
-        await callback.message.edit_text("Выберите страну:", reply_markup=country_keyboard(departure=False))
+        await callback.message.edit_text("Выберите страну:", reply_markup=country_keyboard(departure=False, page=0))
         return
     user_id = callback.from_user.id
     balance = db.get_balance(user_id)
@@ -775,7 +884,7 @@ async def confirm_payment(callback: CallbackQuery):
     account = db.get_account(account_id)
     if not account or account["is_sold"]:
         await callback.answer("Аккаунт уже продан.", show_alert=True)
-        await callback.message.edit_text("Выберите страну:", reply_markup=country_keyboard(departure=False))
+        await callback.message.edit_text("Выберите страну:", reply_markup=country_keyboard(departure=False, page=0))
         return
     user_id = callback.from_user.id
     balance = db.get_balance(user_id)
@@ -791,7 +900,50 @@ async def confirm_payment(callback: CallbackQuery):
     await bot.send_message(user_id, "✍️ Оставьте отзыв о покупке, нажав на кнопку ниже.", reply_markup=review_keyboard())
     await callback.answer()
 
-# ------------------ ПРОФИЛЬ (ИСПРАВЛЕН) ------------------
+@dp.callback_query(F.data == "reviews")
+async def show_reviews(callback: CallbackQuery):
+    reviews = db.get_all_reviews(limit=50)
+    if not reviews:
+        text = "⭐ Пока нет отзывов. Будьте первым!"
+    else:
+        text = "⭐ Отзывы наших клиентов:\n\n"
+        for rev in reviews:
+            stars = "⭐" * rev["rating"]
+            text += f"👤 {rev['username']}\n{stars}\n{rev['review_text']}\n\n"
+    await callback.message.edit_text(text, reply_markup=review_keyboard())
+    await callback.answer()
+
+@dp.callback_query(F.data == "leave_review")
+async def leave_review_start(callback: CallbackQuery, state: FSMContext):
+    await callback.message.edit_text(
+        "✍️ Оцените нашу работу, выберите количество звёзд:",
+        reply_markup=rating_keyboard()
+    )
+    await state.set_state(ReviewStates.waiting_for_rating)
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("rating_"))
+async def review_rating(callback: CallbackQuery, state: FSMContext):
+    rating = int(callback.data.split("_")[1])
+    await state.update_data(rating=rating)
+    await callback.message.edit_text(
+        f"Вы выбрали {'⭐' * rating}\nТеперь напишите текст вашего отзыва:",
+        reply_markup=back_to_menu_keyboard()
+    )
+    await state.set_state(ReviewStates.waiting_for_text)
+    await callback.answer()
+
+@dp.message(ReviewStates.waiting_for_text)
+async def review_text(message: Message, state: FSMContext):
+    data = await state.get_data()
+    rating = data.get("rating")
+    user_id = message.from_user.id
+    username = message.from_user.username or "Без ника"
+    text = message.text
+    db.add_review(user_id, username, rating, text)
+    await message.answer("✅ Спасибо за ваш отзыв! Он помогает нам становиться лучше.", reply_markup=back_to_menu_keyboard())
+    await state.clear()
+
 @dp.callback_query(F.data == "profile")
 async def profile(callback: CallbackQuery):
     user_id = callback.from_user.id
@@ -829,7 +981,6 @@ async def profile(callback: CallbackQuery):
     await callback.message.edit_text(text, reply_markup=profile_keyboard())
     await callback.answer()
 
-# ------------------ ПОПОЛНЕНИЕ БАЛАНСА ------------------
 @dp.callback_query(F.data == "deposit")
 async def deposit_start(callback: CallbackQuery, state: FSMContext):
     card_details = db.get_setting("card_details") or DEFAULT_CARD_DETAILS
@@ -882,7 +1033,6 @@ async def process_deposit_screenshot(message: Message, state: FSMContext):
     await message.answer("✅ Ваша заявка на пополнение отправлена. Ожидайте подтверждения администратором.", reply_markup=back_to_menu_keyboard())
     await state.clear()
 
-# ------------------ МОИ АККАУНТЫ ------------------
 @dp.callback_query(F.data == "my_accounts")
 async def my_accounts(callback: CallbackQuery):
     user_id = callback.from_user.id
@@ -919,7 +1069,6 @@ async def my_account_details(callback: CallbackQuery):
     await send_account_data(user_id, account, caption_extra="")
     await callback.answer()
 
-# ------------------ ПРОМОКОД ------------------
 @dp.callback_query(F.data == "promocode")
 async def promocode_start(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_text("🎫 Введите промокод:\n\nДля отмены отправьте /cancel", reply_markup=back_to_menu_keyboard())
@@ -940,7 +1089,6 @@ async def process_promocode(message: Message, state: FSMContext):
         await message.answer(f"✅ Промокод активирован! Вы получили {bonus}₽ на баланс.", reply_markup=back_to_menu_keyboard())
     await state.clear()
 
-# ------------------ ТОП ПОКУПАТЕЛЕЙ ------------------
 @dp.callback_query(F.data == "top_buyers")
 async def top_buyers(callback: CallbackQuery):
     top = db.get_top_buyers(10)
@@ -954,7 +1102,6 @@ async def top_buyers(callback: CallbackQuery):
     await callback.message.edit_text(text, reply_markup=back_to_menu_keyboard())
     await callback.answer()
 
-# ------------------ ПОДДЕРЖКА ------------------
 @dp.callback_query(F.data == "support")
 async def support_start(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_text("📞 Напишите ваше сообщение в техподдержку.\nМы ответим вам в ближайшее время.", reply_markup=back_to_menu_keyboard())
@@ -978,13 +1125,13 @@ async def support_receive_message(message: Message, state: FSMContext):
     await message.answer("✅ Ваше сообщение отправлено. Мы свяжемся с вами в ближайшее время.", reply_markup=back_to_menu_keyboard())
     await state.clear()
 
-# ================== АДМИН-ПАНЕЛЬ (ВСЕ ОБРАБОТЧИКИ) ==================
+# ================== АДМИН-ПАНЕЛЬ (все обработчики) ==================
 @dp.callback_query(F.data == "admin_panel")
 async def admin_panel(callback: CallbackQuery):
     if callback.from_user.id not in ADMIN_IDS:
         await callback.answer("Доступ запрещён.", show_alert=True)
         return
-    await callback.message.edit_text("🛠 Админ-панель\nВыберите действие:", reply_markup=admin_panel_keyboard())
+    await callback.message.edit_text("⚙️ Админ-панель\nВыберите действие:", reply_markup=admin_panel_keyboard())
     await callback.answer()
 
 @dp.callback_query(F.data == "admin_deposits")
@@ -1068,7 +1215,7 @@ async def admin_reject_deposit(callback: CallbackQuery):
     await callback.message.edit_text("❌ Заявка отклонена.", reply_markup=back_to_menu_keyboard())
     await callback.answer()
 
-# ------------------ ДОБАВЛЕНИЕ АККАУНТА ------------------
+# Добавление аккаунта (админ)
 @dp.callback_query(F.data == "admin_add_account")
 async def admin_add_account(callback: CallbackQuery, state: FSMContext):
     if callback.from_user.id not in ADMIN_IDS:
@@ -1175,7 +1322,7 @@ async def admin_add_departure(message: Message, state: FSMContext):
     )
     await state.clear()
 
-# ------------------ СТАТИСТИКА ------------------
+# Статистика
 @dp.callback_query(F.data == "admin_stats")
 async def admin_stats(callback: CallbackQuery):
     if callback.from_user.id not in ADMIN_IDS:
@@ -1190,6 +1337,7 @@ async def admin_stats(callback: CallbackQuery):
     )
     await callback.answer()
 
+# Мой баланс (админ)
 @dp.callback_query(F.data == "admin_balance")
 async def admin_balance(callback: CallbackQuery):
     if callback.from_user.id not in ADMIN_IDS:
@@ -1204,6 +1352,7 @@ async def admin_balance(callback: CallbackQuery):
     )
     await callback.answer()
 
+# Вывод средств (админ)
 @dp.callback_query(F.data == "admin_withdraw")
 async def admin_withdraw(callback: CallbackQuery, state: FSMContext):
     if callback.from_user.id not in ADMIN_IDS:
@@ -1242,7 +1391,7 @@ async def admin_withdraw_amount(message: Message, state: FSMContext):
     await message.answer(f"✅ Запрос на вывод {amount}₽ отправлен. Ожидайте обработки.", reply_markup=back_to_menu_keyboard())
     await state.clear()
 
-# ------------------ ОТВЕТ В ПОДДЕРЖКУ (АДМИН) ------------------
+# Ответ в поддержку (админ)
 @dp.callback_query(F.data == "admin_support_reply")
 async def admin_support_reply(callback: CallbackQuery):
     if callback.from_user.id not in ADMIN_IDS:
@@ -1311,7 +1460,7 @@ async def admin_reply_support_process(message: Message, state: FSMContext):
     await message.answer("✅ Ответ отправлен пользователю.", reply_markup=back_to_menu_keyboard())
     await state.clear()
 
-# ------------------ СОЗДАНИЕ ПРОМОКОДА ------------------
+# Создание промокода (админ)
 @dp.callback_query(F.data == "admin_create_promo")
 async def admin_create_promo(callback: CallbackQuery, state: FSMContext):
     if callback.from_user.id not in ADMIN_IDS:
@@ -1363,7 +1512,7 @@ async def admin_promo_expiry(message: Message, state: FSMContext):
     )
     await state.clear()
 
-# ------------------ ИЗМЕНЕНИЕ БАННЕРА ------------------
+# Изменение баннера (админ)
 @dp.callback_query(F.data == "admin_change_banner")
 async def admin_change_banner(callback: CallbackQuery, state: FSMContext):
     if callback.from_user.id not in ADMIN_IDS:
@@ -1399,7 +1548,7 @@ async def admin_banner_description(message: Message, state: FSMContext):
     await message.answer("✅ Баннер обновлён!", reply_markup=back_to_menu_keyboard())
     await state.clear()
 
-# ------------------ ИЗМЕНЕНИЕ ОПИСАНИЯ ------------------
+# Изменение описания (админ)
 @dp.callback_query(F.data == "admin_change_desc")
 async def admin_change_desc(callback: CallbackQuery, state: FSMContext):
     if callback.from_user.id not in ADMIN_IDS:
@@ -1419,7 +1568,7 @@ async def admin_change_desc_process(message: Message, state: FSMContext):
     await message.answer("✅ Описание обновлено (старое удалено)!", reply_markup=back_to_menu_keyboard())
     await state.clear()
 
-# ------------------ МОИ РЕКВИЗИТЫ (АДМИН) ------------------
+# Мои реквизиты (админ)
 @dp.callback_query(F.data == "admin_my_details")
 async def admin_my_details(callback: CallbackQuery, state: FSMContext):
     if callback.from_user.id not in ADMIN_IDS:
@@ -1472,19 +1621,6 @@ async def admin_details_name(message: Message, state: FSMContext):
         message.text.strip()
     )
     await message.answer("✅ Реквизиты сохранены!", reply_markup=back_to_menu_keyboard())
-    await state.clear()
-
-# ------------------ ОТЗЫВЫ ------------------
-@dp.callback_query(F.data == "leave_review")
-async def leave_review(callback: CallbackQuery, state: FSMContext):
-    await callback.message.edit_text("✍️ Напишите ваш отзыв о покупке. Мы будем рады услышать ваше мнение!", reply_markup=back_to_menu_keyboard())
-    await state.set_state(ReviewStates.waiting_for_review)
-    await callback.answer()
-
-@dp.message(ReviewStates.waiting_for_review)
-async def process_review(message: Message, state: FSMContext):
-    db.add_review(message.from_user.id, message.text)
-    await message.answer("✅ Спасибо за ваш отзыв! Он помогает нам становиться лучше.", reply_markup=back_to_menu_keyboard())
     await state.clear()
 
 # ================== ЗАПУСК БОТА + ВЕБ-СЕРВЕР ==================
