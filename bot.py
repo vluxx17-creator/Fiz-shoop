@@ -311,6 +311,7 @@ class Database:
             (country, number, code, date, price, description, file_id, photo_id, admin_id, 1 if is_departure else 0),
         )
         self.conn.commit()
+        logger.info(f"Добавлен аккаунт: {country} {number} (админ {admin_id})")
 
     def get_user_purchases(self, user_id: int) -> List[Dict[str, Any]]:
         self.cursor.execute("""
@@ -485,6 +486,7 @@ class Database:
         return row[0] if row else None
 
     def set_setting(self, key: str, value: str):
+        # Полностью заменяем старое значение
         self.cursor.execute(
             "INSERT OR REPLACE INTO shop_settings (key, value) VALUES (?, ?)",
             (key, value)
@@ -593,6 +595,7 @@ def country_keyboard(departure: bool = False):
     countries = ["РФ", "КЗ", "УКР", "Беларусь", "Узбекистан", "Азербайджан"]
     builder = InlineKeyboardBuilder()
     for country in countries:
+        # Передаём флаг departure в callback_data
         builder.button(text=country, callback_data=f"country_{country}_{1 if departure else 0}")
     builder.button(text="🔙 Назад", callback_data="main_menu")
     builder.adjust(2)
@@ -708,8 +711,8 @@ class AdminAddAccountStates(StatesGroup):
     waiting_date = State()
     waiting_price = State()
     waiting_description = State()
-    waiting_file = State()
     waiting_photo = State()
+    waiting_file = State()
     waiting_departure = State()
 
 class AdminWithdrawStates(StatesGroup):
@@ -787,13 +790,15 @@ async def send_welcome_message(chat_id: int):
     banner = db.get_active_banner()
     welcome_text = db.get_setting("welcome_text") or "Добро пожаловать в Fiz-shop!"
     if banner and banner.get("photo_id"):
-        caption = f"<b>{banner.get('title', 'Fiz-shop')}</b>\n\n{banner.get('description', '')}"
+        # Отправляем баннер как фото с подписью (без лишних заголовков)
+        caption = f"<b>Fiz-shop</b>\n\n{banner.get('description', '')}"
         await bot.send_photo(
             chat_id=chat_id,
             photo=banner["photo_id"],
             caption=caption,
             parse_mode="HTML"
         )
+    # Приветственное сообщение с основным текстом
     await bot.send_message(
         chat_id,
         f"{hbold('Fiz-shop')}\n\n"
@@ -872,6 +877,9 @@ async def accounts_departure_menu(callback: CallbackQuery):
 @dp.callback_query(F.data.startswith("country_"))
 async def select_country(callback: CallbackQuery):
     parts = callback.data.split("_")
+    if len(parts) < 3:
+        await callback.answer("Ошибка в данных", show_alert=True)
+        return
     country = parts[1]
     is_departure = bool(int(parts[2]))
     accounts = db.get_available_accounts(country, departure=is_departure)
@@ -933,6 +941,7 @@ async def confirm_payment(callback: CallbackQuery):
     await bot.send_message(user_id, "✍️ Оставьте отзыв о покупке, нажав на кнопку ниже.", reply_markup=review_keyboard())
     await callback.answer()
 
+# ------------------ ПРОФИЛЬ (ИСПРАВЛЕН) ------------------
 @dp.callback_query(F.data == "profile")
 async def profile(callback: CallbackQuery):
     user_id = callback.from_user.id
@@ -951,7 +960,10 @@ async def profile(callback: CallbackQuery):
     except:
         reg_date = registered_at
 
-    invite_link = f"https://t.me/{bot.username}?start=ref_{user_id}"
+    # Получаем username бота для ссылки
+    bot_username = (await bot.get_me()).username
+    invite_link = f"https://t.me/{bot_username}?start=ref_{user_id}"
+
     text = (
         f"👤 Твой профиль\n\n"
         f"ID: {user_id}\n"
@@ -968,6 +980,7 @@ async def profile(callback: CallbackQuery):
     await callback.message.edit_text(text, reply_markup=profile_keyboard())
     await callback.answer()
 
+# ------------------ ПОПОЛНЕНИЕ БАЛАНСА ------------------
 @dp.callback_query(F.data == "deposit")
 async def deposit_start(callback: CallbackQuery, state: FSMContext):
     card_details = db.get_setting("card_details") or DEFAULT_CARD_DETAILS
@@ -1556,7 +1569,7 @@ async def admin_banner_description(message: Message, state: FSMContext):
     await message.answer("✅ Баннер обновлён!", reply_markup=back_to_menu_keyboard())
     await state.clear()
 
-# ------------------ ИЗМЕНЕНИЕ ОПИСАНИЯ (АДМИН) ------------------
+# ------------------ ИЗМЕНЕНИЕ ОПИСАНИЯ (АДМИН) - ПОЛНАЯ ЗАМЕНА ------------------
 @dp.callback_query(F.data == "admin_change_desc")
 async def admin_change_desc(callback: CallbackQuery, state: FSMContext):
     if callback.from_user.id not in ADMIN_IDS:
@@ -1572,8 +1585,9 @@ async def admin_change_desc(callback: CallbackQuery, state: FSMContext):
 
 @dp.message(AdminChangeDescStates.waiting_text)
 async def admin_change_desc_process(message: Message, state: FSMContext):
+    # Полностью заменяем старое значение
     db.set_setting("welcome_text", message.text)
-    await message.answer("✅ Описание обновлено!", reply_markup=back_to_menu_keyboard())
+    await message.answer("✅ Описание обновлено (старое удалено)!", reply_markup=back_to_menu_keyboard())
     await state.clear()
 
 # ------------------ МОИ РЕКВИЗИТЫ (АДМИН) ------------------
