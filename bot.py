@@ -18,18 +18,17 @@ from aiogram.types import (
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-# ================== ВАШИ ДАННЫЕ (подставлены) ==================
+# ================== ВАШИ ДАННЫЕ ==================
 BOT_TOKEN = "8918867676:AAHixz0SseKQ9eqV99oDPI-CTwdQsXrO9mI"
 ADMIN_IDS = [7727618205, 8297446667]
-
-# Для платежей – замените на реальный PROVIDER_TOKEN от @BotFather
-PROVIDER_TOKEN = "TEST"  # или ваш настоящий токен
+PROVIDER_TOKEN = "TEST"  # замените на реальный токен для приема платежей
 
 DATABASE_NAME = "shop_bot.db"
 MIN_DEPOSIT = 40
 
 # ================== НАСТРОЙКА ЛОГИРОВАНИЯ ==================
 logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # ================== ИНИЦИАЛИЗАЦИЯ БОТА ==================
 bot = Bot(token=BOT_TOKEN)
@@ -299,7 +298,7 @@ class Database:
 # ================== ИНИЦИАЛИЗАЦИЯ БД ==================
 db = Database(DATABASE_NAME)
 
-# Закомментируйте или удалите эту функцию, если не нужны тестовые аккаунты
+# Заполним тестовыми аккаунтами (если таблица пуста)
 def seed_accounts():
     existing = db.cursor.execute("SELECT COUNT(*) FROM accounts").fetchone()[0]
     if existing == 0:
@@ -316,7 +315,7 @@ def seed_accounts():
             db.add_account(country, number, code, date, price, desc, file_id)
         db.conn.commit()
 
-seed_accounts()  # раскомментируйте, если нужны тестовые данные
+seed_accounts()
 
 # ================== КЛАВИАТУРЫ ==================
 def main_menu_keyboard(user_id: int):
@@ -432,7 +431,7 @@ async def send_account_data(chat_id: int, account: Dict[str, Any], caption_extra
                 reply_markup=back_to_menu_keyboard()
             )
         except Exception as e:
-            logging.error(f"Ошибка отправки файла: {e}")
+            logger.error(f"Ошибка отправки файла: {e}")
             await bot.send_message(chat_id, text, reply_markup=back_to_menu_keyboard())
     else:
         await bot.send_message(chat_id, text, reply_markup=back_to_menu_keyboard())
@@ -668,7 +667,7 @@ async def process_deposit_amount(message: Message, state: FSMContext):
             is_flexible=False,
         )
     except Exception as e:
-        logging.error(f"Ошибка отправки инвойса: {e}")
+        logger.error(f"Ошибка отправки инвойса: {e}")
         await message.answer(
             "❌ Ошибка при создании платежа. Попробуйте позже.",
             reply_markup=back_to_menu_keyboard()
@@ -698,7 +697,7 @@ async def successful_payment_handler(message: Message):
         else:
             await message.answer("Получен платёж с неизвестным payload.", reply_markup=back_to_menu_keyboard())
     except Exception as e:
-        logging.error(f"Ошибка обработки платежа: {e}")
+        logger.error(f"Ошибка обработки платежа: {e}")
         await message.answer("Произошла ошибка при обработке платежа.", reply_markup=back_to_menu_keyboard())
 
 # ================== МОИ АККАУНТЫ ==================
@@ -796,7 +795,7 @@ async def support_receive_message(message: Message, state: FSMContext):
                 f"Для ответа используйте команду:\n/reply {user_id} <текст>"
             )
         except Exception as e:
-            logging.error(f"Не удалось отправить уведомление админу {admin_id}: {e}")
+            logger.error(f"Не удалось отправить уведомление админу {admin_id}: {e}")
     await message.answer(
         "✅ Ваше сообщение отправлено. Мы свяжемся с вами в ближайшее время.",
         reply_markup=back_to_menu_keyboard()
@@ -982,9 +981,29 @@ async def admin_users_list(callback: CallbackQuery):
     await callback.message.edit_text(text, reply_markup=back_to_menu_keyboard())
     await callback.answer()
 
-# ================== ЗАПУСК БОТА ==================
+# ================== ЗАПУСК БОТА + ВЕБ-СЕРВЕР ==================
 async def main():
-    await dp.start_polling(bot)
+    # Запускаем веб-сервер для Render (чтобы он видел открытый порт)
+    from aiohttp import web
+
+    async def health_check(request):
+        return web.Response(text="OK", status=200)
+
+    app = web.Application()
+    app.router.add_get("/", health_check)
+    app.router.add_get("/health", health_check)
+
+    # Запускаем веб-сервер на порту 8080 (или из переменной PORT)
+    port = int(os.environ.get("PORT", 8080))
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", port)
+
+    # Запускаем веб-сервер и бота параллельно
+    await asyncio.gather(
+        site.start(),
+        dp.start_polling(bot)
+    )
 
 if __name__ == "__main__":
     asyncio.run(main())
